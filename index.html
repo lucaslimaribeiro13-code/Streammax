@@ -10,41 +10,26 @@
 body { background:#121212; color:white; font-family:sans-serif; }
 .section-title { margin:30px 0 15px; font-size:20px; font-weight:bold; }
 
-/* Grid 2 cards por linha */
 .grid-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 15px;
-  width: 100%;
-  margin: 0 auto;
 }
 
 .card {
-  display: flex;
-  flex-direction: column;
   background: #1e1e1e;
   border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.3s, background 0.3s;
+  transition: 0.3s;
 }
+.card:hover { transform: scale(1.03); background:#2a2a2a; }
+.card img { width:100%; }
 
-.card:hover { transform: scale(1.03); background: #2a2a2a; }
+.card-info { padding:10px; }
+.card-info h3 { font-weight:bold; margin-bottom:5px; }
+.card-info p { font-size:0.9rem; opacity:0.7; }
 
-.card img {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
-.card-info {
-  padding: 10px;
-}
-
-.card-info h3 { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; }
-.card-info p { font-size: 0.9rem; opacity: 0.7; }
-
-/* Modal player */
 .modal {
   position: fixed;
   inset: 0;
@@ -55,16 +40,31 @@ body { background:#121212; color:white; font-family:sans-serif; }
   z-index: 9999;
 }
 
-iframe { width: 100%; aspect-ratio: 16/9; }
+iframe { width:100%; aspect-ratio:16/9; }
+
+.loading { text-align:center; padding:20px; opacity:0.6; }
 </style>
 </head>
+
 <body>
 
-<header class="p-4 flex flex-col md:flex-row gap-3 md:justify-between md:items-center bg-black sticky top-0 z-50">
-<h1 class="text-2xl font-bold text-purple-500 cursor-pointer">StreamMax</h1>
+<header class="p-4 flex flex-col md:flex-row gap-4 md:justify-between md:items-center bg-black sticky top-0 z-50">
 
-<div class="flex gap-2 w-full md:w-auto">
-<input id="searchInput" type="text" placeholder="Buscar filmes ou séries..."
+<div class="flex flex-col">
+  <h1 class="text-2xl font-bold text-purple-500 cursor-pointer">StreamMax</h1>
+  <div class="flex gap-4 mt-2">
+    <button id="btnMovies" class="text-lg font-semibold text-gray-300 hover:text-purple-400 transition">Filmes</button>
+    <button id="btnSeries" class="text-lg font-semibold text-gray-300 hover:text-purple-400 transition">Séries</button>
+  </div>
+</div>
+
+<div class="flex gap-2 items-center w-full md:w-auto">
+<select id="genreSelect" class="hidden bg-[#1E1E1E] px-4 py-2 rounded">
+<option value="">Gênero</option>
+</select>
+
+<input id="searchInput" type="text"
+placeholder="Buscar..."
 class="bg-[#1E1E1E] px-4 py-2 rounded w-full md:w-80 outline-none">
 
 <button id="searchButton"
@@ -76,11 +76,13 @@ Buscar
 
 <main class="p-6">
 
-<h2 class="section-title">🔥 Em Alta</h2>
+<h2 id="trendingTitle" class="section-title">🔥 Em Alta</h2>
 <div id="trending" class="grid-row"></div>
 
-<h2 id="searchTitle" class="section-title hidden">🔎 Resultados</h2>
+<h2 id="searchTitle" class="section-title hidden"></h2>
 <div id="catalog" class="grid-row"></div>
+
+<div id="loading" class="loading hidden">Carregando...</div>
 
 </main>
 
@@ -94,221 +96,228 @@ Buscar
 </div>
 
 <script>
-const TMDB_API_KEY = "1cb0150565ed301986102d425eda82f9";
-const IMG_BASE = "https://image.tmdb.org/t/p/w500";
+const TMDB_API_KEY="1cb0150565ed301986102d425eda82f9";
+const IMG_BASE="https://image.tmdb.org/t/p/w500";
 
-/* ================= INIT ================= */
-document.addEventListener("DOMContentLoaded", () => {
-  loadTrending();
+let currentType=null;
+let currentPage=1;
+let totalPages=1;
+let currentGenre="";
+let currentSearch="";
+let isLoading=false;
 
-  const searchInput = document.getElementById("searchInput");
-  const searchButton = document.getElementById("searchButton");
-  const trending = document.getElementById("trending");
-  const trendingTitle = document.querySelector("h2.section-title"); // 🔥 Em Alta
-  const catalog = document.getElementById("catalog");
-  const searchTitle = document.getElementById("searchTitle");
-  const logo = document.querySelector("h1");
+/* INIT */
+document.addEventListener("DOMContentLoaded",()=>{
+ loadTrending();
 
-  // Botão StreamMax volta para Em Alta
-  logo.addEventListener("click", () => {
-    trending.style.display = "grid";           // mostra cards
-    trendingTitle.style.display = "block";     // mostra título
-    searchTitle.classList.add("hidden");       // esconde Resultados
-    catalog.innerHTML = "";                     // limpa resultados
-    searchInput.value = "";                     // limpa input
-    scrollToTop();
-  });
+ document.getElementById("btnMovies").onclick=()=>initType("movie");
+ document.getElementById("btnSeries").onclick=()=>initType("tv");
+ document.getElementById("searchButton").onclick=handleSearch;
+ document.getElementById("genreSelect").onchange=e=>{
+   currentGenre=e.target.value;
+   resetCatalog();
+   loadContent();
+ };
 
-  searchButton.addEventListener("click", handleSearch);
-  searchInput.addEventListener("keypress", e => {
-    if(e.key === "Enter") handleSearch();
-  });
+ window.addEventListener("scroll",handleScroll);
+ document.querySelector("h1").onclick=resetHome;
 });
 
-/* ================= FETCH ================= */
-async function fetchData(url){
-  const res = await fetch(url);
-  if(!res.ok) throw new Error("Erro API");
-  return res.json();
+/* SCROLL INFINITO */
+function handleScroll(){
+ if(isLoading) return;
+ if(window.innerHeight+window.scrollY>=document.body.offsetHeight-300){
+   if(currentPage<totalPages){
+     currentPage++;
+     loadContent();
+   }
+ }
 }
 
-/* ================= HOME ================= */
-function renderRow(data, elementId){
-  const container = document.getElementById(elementId);
-  container.innerHTML = "";
-
-  data.results.forEach(item => {
-    if(!item.poster_path) return;
-
-    const type = item.media_type === "tv" ? "serie" : "filme";
-
-    container.innerHTML += `
-      <div class="card" onclick="openPlayer('${type}','${item.id}')">
-        <img src="${IMG_BASE + item.poster_path}">
-        <div class="card-info">
-          <h3>${item.title || item.name}</h3>
-          <p>${(item.overview || "").substring(0, 100)}...</p>
-        </div>
-      </div>`;
-  });
+/* RESET */
+function resetCatalog(){
+ document.getElementById("catalog").innerHTML="";
+ currentPage=1;
 }
 
+function resetHome(){
+ currentType=null;
+ currentSearch="";
+ currentGenre="";
+ document.getElementById("genreSelect").classList.add("hidden");
+ document.getElementById("searchTitle").classList.add("hidden");
+ document.getElementById("trendingTitle").style.display="block";
+ document.getElementById("trending").style.display="grid";
+ document.getElementById("catalog").innerHTML="";
+}
+
+/* TRENDING */
 async function loadTrending(){
-  const data = await fetchData(
-  `https://api.themoviedb.org/3/trending/all/week?api_key=${TMDB_API_KEY}&language=pt-BR`);
-  renderRow(data, "trending");
+ const res=await fetch(`https://api.themoviedb.org/3/trending/all/week?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const data=await res.json();
+ renderItems(data.results,"trending");
 }
 
-/* ================= BUSCA ================= */
-async function handleSearch(){
-  const query = document.getElementById("searchInput").value.trim();
-  const trending = document.getElementById("trending");
-  const trendingTitle = document.querySelector("h2.section-title"); // 🔥 Em Alta
-  const catalog = document.getElementById("catalog");
-  const searchTitle = document.getElementById("searchTitle");
+/* INIT TYPE */
+async function initType(type){
+ currentType=type;
+ currentSearch="";
+ currentGenre="";
+ resetCatalog();
 
-  if(!query) return;
+ document.getElementById("trending").style.display="none";
+ document.getElementById("trendingTitle").style.display="none";
+ document.getElementById("searchTitle").classList.remove("hidden");
+ document.getElementById("searchTitle").innerText=type==="movie"?"🎬 Filmes":"📺 Séries";
+ document.getElementById("genreSelect").classList.remove("hidden");
 
-  // ESCONDE Em Alta (título + cards)
-  trending.style.display = "none";
-  trendingTitle.style.display = "none";
-
-  // MOSTRA apenas resultados
-  catalog.innerHTML = "";
-  searchTitle.classList.remove("hidden");
-
-  const data = await fetchData(
-    `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_API_KEY}&language=pt-BR&query=${encodeURIComponent(query)}`
-  );
-
-  if(!data.results || data.results.length === 0){
-    catalog.innerHTML = "<p>Nenhum resultado encontrado.</p>";
-    return;
-  }
-
-  data.results.forEach(item => {
-    if(!item.poster_path) return;
-    if(item.media_type !== "movie" && item.media_type !== "tv") return;
-
-    const type = item.media_type === "movie" ? "filme" : "serie";
-
-    catalog.innerHTML += `
-      <div class="card" onclick="openPlayer('${type}','${item.id}')">
-        <img src="${IMG_BASE + item.poster_path}">
-        <div class="card-info">
-          <h3>${item.title || item.name}</h3>
-          <p>${(item.overview || "").substring(0, 100)}...</p>
-        </div>
-      </div>`;
-  });
+ await loadGenres(type);
+ loadContent();
 }
 
-/* ================= PLAYER ================= */
-async function openPlayer(type,id){
-  if(type === "filme") openMovie(id);
-  else openSeries(id);
+/* GENEROS */
+async function loadGenres(type){
+ const res=await fetch(`https://api.themoviedb.org/3/genre/${type}/list?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const data=await res.json();
+ const select=document.getElementById("genreSelect");
+ select.innerHTML='<option value="">Todos</option>';
+ data.genres.forEach(g=>{
+   select.innerHTML+=`<option value="${g.id}">${g.name}</option>`;
+ });
 }
 
+/* BUSCA */
+function handleSearch(){
+ const q=document.getElementById("searchInput").value.trim();
+ if(!q) return;
+ currentSearch=q;
+ currentType=null;
+ currentGenre="";
+ resetCatalog();
+ document.getElementById("genreSelect").classList.add("hidden");
+ document.getElementById("trending").style.display="none";
+ document.getElementById("trendingTitle").style.display="none";
+ document.getElementById("searchTitle").classList.remove("hidden");
+ document.getElementById("searchTitle").innerText="🔎 Resultados";
+ loadContent();
+}
+
+/* LOAD CONTENT */
+async function loadContent(){
+ if(isLoading) return;
+ isLoading=true;
+ document.getElementById("loading").classList.remove("hidden");
+
+ let url;
+ if(currentSearch){
+   url=`https://api.themoviedb.org/3/search/multi?api_key=${TMDB_API_KEY}&language=pt-BR&query=${encodeURIComponent(currentSearch)}&page=${currentPage}`;
+ }else{
+   url=`https://api.themoviedb.org/3/discover/${currentType}?api_key=${TMDB_API_KEY}&language=pt-BR&sort_by=popularity.desc&page=${currentPage}${currentGenre?`&with_genres=${currentGenre}`:""}`;
+ }
+
+ const res=await fetch(url);
+ const data=await res.json();
+ totalPages=data.total_pages;
+
+ renderItems(data.results,"catalog");
+
+ isLoading=false;
+ document.getElementById("loading").classList.add("hidden");
+}
+
+/* RENDER */
+function renderItems(items,containerId){
+ const container=document.getElementById(containerId);
+
+ items.forEach(item=>{
+   if(!item.poster_path) return;
+   if(containerId==="catalog" && item.media_type && item.media_type!=="movie" && item.media_type!=="tv") return;
+
+   const type=item.media_type?(item.media_type==="tv"?"serie":"filme"):(currentType==="tv"?"serie":"filme");
+
+   container.innerHTML+=`
+   <div class="card" onclick="openPlayer('${type}','${item.id}')">
+     <img src="${IMG_BASE+item.poster_path}">
+     <div class="card-info">
+       <h3>${item.title||item.name}</h3>
+       <p>${(item.overview||"").substring(0,100)}...</p>
+     </div>
+   </div>`;
+ });
+}
+
+/* PLAYER */
+function openPlayer(type,id){
+ if(type==="filme") openMovie(id);
+ else openSeries(id);
+}
+
+/* FILME */
 function openMovie(id){
-  document.getElementById("playerContainer").innerHTML =
-  `<iframe src="https://playerflixapi.com/filme/${id}" frameborder="0" allowfullscreen loading="lazy"></iframe>`;
-  document.getElementById("playerModal").style.display = "block";
+ document.getElementById("playerContainer").innerHTML=
+ `<iframe src="https://playerflixapi.com/filme/${id}" frameborder="0" allowfullscreen></iframe>`;
+ document.getElementById("playerModal").style.display="block";
 }
 
-/* ================= SÉRIES ================= */
+/* SÉRIE COMPLETA */
 async function openSeries(id){
-  const data = await fetchData(
-  `https://api.themoviedb.org/3/tv/${id}?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const res=await fetch(`https://api.themoviedb.org/3/tv/${id}?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const data=await res.json();
 
-  const seasons = data.seasons.filter(s => s.season_number > 0);
+ const seasons=data.seasons.filter(s=>s.season_number>0);
 
-  document.getElementById("playerContainer").innerHTML = `
-  <div>
-    <div class="relative mb-6">
-      <img src="https://image.tmdb.org/t/p/original${data.backdrop_path}"
-      class="w-full rounded-lg opacity-40">
-      <div class="absolute bottom-4 left-4">
-        <h2 class="text-3xl font-bold">${data.name}</h2>
-        <p class="max-w-2xl text-sm opacity-80">${data.overview}</p>
-      </div>
-    </div>
+ document.getElementById("playerContainer").innerHTML=`
+ <div>
+   <h2 class="text-3xl font-bold mb-2">${data.name}</h2>
+   <p class="mb-4 opacity-80">${data.overview}</p>
 
-    <select id="seasonSelect"
-    class="bg-[#1E1E1E] px-4 py-2 rounded mb-4"
-    onchange="loadEpisodes(${id},this.value)">
-    ${seasons.map(s =>
-    `<option value="${s.season_number}">Temporada ${s.season_number}</option>`).join("")}
-    </select>
+   <select id="seasonSelect"
+   class="bg-[#1E1E1E] px-4 py-2 rounded mb-4"
+   onchange="loadEpisodes(${id},this.value)">
+   ${seasons.map(s=>`<option value="${s.season_number}">Temporada ${s.season_number}</option>`).join("")}
+   </select>
 
-    <div id="episodesList"
-    class="flex gap-3 overflow-x-auto mb-6"></div>
+   <div id="episodesList" class="flex gap-2 overflow-x-auto mb-6"></div>
+   <div id="episodeInfo" class="mb-4"></div>
+   <div id="episodePlayer"></div>
+ </div>`;
 
-    <div id="episodeInfo" class="mb-4"></div>
-    <div id="episodePlayer"></div>
-  </div>`;
-
-  document.getElementById("playerModal").style.display = "block";
-  loadEpisodes(id,seasons[0].season_number);
+ document.getElementById("playerModal").style.display="block";
+ loadEpisodes(id,seasons[0].season_number);
 }
 
 async function loadEpisodes(seriesId,seasonNumber){
-  const data = await fetchData(
-  `https://api.themoviedb.org/3/tv/${seriesId}/season/${seasonNumber}?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const res=await fetch(`https://api.themoviedb.org/3/tv/${seriesId}/season/${seasonNumber}?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const data=await res.json();
+ const list=document.getElementById("episodesList");
+ list.innerHTML="";
 
-  const list = document.getElementById("episodesList");
-  list.innerHTML = "";
-
-  data.episodes.forEach(ep => {
-    const key = `watched_${seriesId}_${seasonNumber}_${ep.episode_number}`;
-    const watched = localStorage.getItem(key);
-
-    list.innerHTML += `
-    <button class="px-3 py-2 rounded whitespace-nowrap
-    ${watched ? 'bg-green-600' : 'bg-purple-600'}"
-    onclick="playEpisode(${seriesId},${seasonNumber},${ep.episode_number},
-    \`${ep.name}\`,\`${ep.overview}\`)">
-    ${ep.episode_number}. ${ep.name}
-    </button>`;
-  });
+ data.episodes.forEach(ep=>{
+   list.innerHTML+=`
+   <button class="bg-purple-600 px-3 py-2 rounded whitespace-nowrap"
+   onclick="playEpisode(${seriesId},${seasonNumber},${ep.episode_number},\`${ep.name}\`,\`${ep.overview}\`)">
+   ${ep.episode_number}. ${ep.name}
+   </button>`;
+ });
 }
 
 function playEpisode(seriesId,seasonNumber,episodeNumber,name,overview){
-  document.getElementById("episodePlayer").innerHTML =
-  `<iframe src="https://playerflixapi.com/serie/${seriesId}/${seasonNumber}/${episodeNumber}"
-  frameborder="0" allowfullscreen loading="lazy"
-  onload="markWatched(${seriesId},${seasonNumber},${episodeNumber})"></iframe>`;
+ document.getElementById("episodePlayer").innerHTML=
+ `<iframe src="https://playerflixapi.com/serie/${seriesId}/${seasonNumber}/${episodeNumber}"
+ frameborder="0" allowfullscreen></iframe>`;
 
-  document.getElementById("episodeInfo").innerHTML =
-  `<h3 class="text-xl font-bold mb-2">
-  Episódio ${episodeNumber} — ${name}
-  </h3>
-  <p>${overview || "Sem descrição disponível."}</p>`;
-
-  autoNext(seriesId,seasonNumber,episodeNumber);
-}
-
-function markWatched(seriesId,seasonNumber,episodeNumber){
-  localStorage.setItem(
-  `watched_${seriesId}_${seasonNumber}_${episodeNumber}`,"true");
-}
-
-function autoNext(seriesId,seasonNumber,episodeNumber){
-  setTimeout(()=>{
-    const next = episodeNumber + 1;
-    const btn = [...document.querySelectorAll("#episodesList button")]
-    .find(b => b.innerText.startsWith(next + "."));
-    if(btn) btn.click();
-  },40*60*1000);
+ document.getElementById("episodeInfo").innerHTML=
+ `<h3 class="text-xl font-bold mb-2">
+ Episódio ${episodeNumber} — ${name}
+ </h3>
+ <p>${overview||"Sem descrição disponível."}</p>`;
 }
 
 function closePlayer(){
-  document.getElementById("playerModal").style.display="none";
-  document.getElementById("playerContainer").innerHTML="";
-}
-
-function scrollToTop(){
-  window.scrollTo({top:0, behavior:"smooth"});
+ document.getElementById("playerModal").style.display="none";
+ document.getElementById("playerContainer").innerHTML="";
 }
 </script>
+
 </body>
 </html>
