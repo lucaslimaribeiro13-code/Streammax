@@ -258,7 +258,7 @@ function openPlayer(type,id){
  else openSeries(id);
 }
 
-/* FILME COM VISUAL PROFISSIONAL */
+/* FILME */
 async function openMovie(id){
  const res = await fetch(`https://api.themoviedb.org/3/movie/${id}?api_key=${TMDB_API_KEY}&language=pt-BR`);
  const data = await res.json();
@@ -300,7 +300,7 @@ async function openMovie(id){
  document.getElementById("playerModal").style.display = "block";
 }
 
-/* SÉRIES (inalterado) */
+/* SÉRIES */
 async function openSeries(id){
  const res=await fetch(`https://api.themoviedb.org/3/tv/${id}?api_key=${TMDB_API_KEY}&language=pt-BR`);
  const data=await res.json();
@@ -324,6 +324,33 @@ async function openSeries(id){
 
  document.getElementById("playerModal").style.display="block";
  loadEpisodes(id,seasons[0].season_number);
+}
+
+async function loadEpisodes(seriesId,seasonNumber){
+ const res=await fetch(`https://api.themoviedb.org/3/tv/${seriesId}/season/${seasonNumber}?api_key=${TMDB_API_KEY}&language=pt-BR`);
+ const data=await res.json();
+ const list=document.getElementById("episodesList");
+ list.innerHTML="";
+
+ data.episodes.forEach(ep=>{
+   list.innerHTML+=`
+   <button class="bg-purple-600 px-3 py-2 rounded whitespace-nowrap"
+   onclick="playEpisode(${seriesId},${seasonNumber},${ep.episode_number},\`${ep.name}\`,\`${ep.overview}\`)">
+   ${ep.episode_number}. ${ep.name}
+   </button>`;
+ });
+}
+
+function playEpisode(seriesId,seasonNumber,episodeNumber,name,overview){
+ document.getElementById("episodePlayer").innerHTML=
+ `<iframe src="https://playerflixapi.com/serie/${seriesId}/${seasonNumber}/${episodeNumber}"
+ frameborder="0" allowfullscreen></iframe>`;
+
+ document.getElementById("episodeInfo").innerHTML=
+ `<h3 class="text-xl font-bold mb-2">
+ Episódio ${episodeNumber} — ${name}
+ </h3>
+ <p>${overview||"Sem descrição disponível."}</p>`;
 }
 
 function closePlayer(){
